@@ -1,9 +1,11 @@
-runtime: go
+runtime: custom
 env: flex
 
 manual_scaling:
   instances: 1
 
 env_variables:
+  # Read the values from the "from-repo" and "to-repo" project metadata values:
+  # https://console.cloud.google.com/compute/metadata
   FROM_REPO: "metadata:from-repo"
   TO_REPO: "metadata:to-repo"
