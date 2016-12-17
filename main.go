@@ -123,7 +123,7 @@ func mirror() {
 		oldSHA = string(sha)
 
 		log.Printf("Pushing")
-		cmd = exec.CommandContext(ctx, "git", "push", "to")
+		cmd = exec.CommandContext(ctx, "git", "push", "--all", "to")
 		cmd.Dir = dir
 		out, err = cmd.CombinedOutput()
 		if err != nil {
