@@ -37,7 +37,6 @@ var (
 	statusTime    time.Time // time status was set
 	statusOK      = true    // normal state?
 	statusMessage string    // status indicator, suitable for public use
-	statusText    []byte    // detailed status, may contain private info
 )
 
 func main() {
@@ -100,9 +99,7 @@ func mirror() {
 	var oldSHA string
 
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-
+		ctx := context.Background()
 		limit.Wait(ctx)
 
 		log.Printf("Pulling")
@@ -168,11 +165,14 @@ func statusErr(msg string, v ...interface{}) {
 
 func status(ok bool, msg string, v ...interface{}) {
 	statusMu.Lock()
-	defer statusMu.Unlock()
 
 	statusOK = ok
 	statusMessage = msg
 	statusTime = time.Now()
+
+	statusMu.Unlock()
+
+	// Log potentially sensitive output.
 
 	buf := &bytes.Buffer{}
 	fmt.Fprintln(buf, msg)
@@ -185,15 +185,15 @@ func status(ok bool, msg string, v ...interface{}) {
 		}
 	}
 
-	statusText = buf.Bytes()
+	b := buf.Bytes()
 
 	// Redact the from/to, just in case there are secrets in the URL (e.g., GitHub token)
-	statusText = bytes.Replace(statusText, []byte(from), []byte("<REDACTED (FROM)>"), -1)
-	statusText = bytes.Replace(statusText, []byte(to), []byte("<REDACTED (TO)>"), -1)
+	b = bytes.Replace(b, []byte(from), []byte("<REDACTED (FROM)>"), -1)
+	b = bytes.Replace(b, []byte(to), []byte("<REDACTED (TO)>"), -1)
 
 	if ok {
-		log.Printf("OK: %s", statusText)
+		log.Printf("OK: %s", b)
 	} else {
-		log.Printf("FAIL: %s", statusText)
+		log.Printf("FAIL: %s", b)
 	}
 }
