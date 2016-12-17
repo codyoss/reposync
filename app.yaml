@@ -1,0 +1,10 @@
+service: gerrit-to-github
+runtime: go
+env: flex
+
+manual_scaling:
+  instances: 1
+
+env_variables:
+  FROM_REPO: "metadata:from-repo"
+  TO_REPO: "metadata:to-repo"
