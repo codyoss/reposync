@@ -33,10 +33,11 @@ var (
 )
 
 var (
-	statusMu   sync.Mutex
-	statusTime time.Time // time status was set
-	statusOK   = true    // normal state?
-	statusText []byte    // current status
+	statusMu      sync.Mutex
+	statusTime    time.Time // time status was set
+	statusOK      = true    // normal state?
+	statusMessage string    // status indicator, suitable for public use
+	statusText    []byte    // detailed status, may contain private info
 )
 
 func main() {
@@ -149,7 +150,7 @@ func statusz(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintln(w, "OK", statusOK)
 	fmt.Fprintln(w, statusTime)
-	w.Write(statusText)
+	fmt.Fprintln(w, statusMessage)
 }
 
 func ok(msg string, v ...interface{}) {
@@ -165,6 +166,7 @@ func status(ok bool, msg string, v ...interface{}) {
 	defer statusMu.Unlock()
 
 	statusOK = ok
+	statusMessage = msg
 	statusTime = time.Now()
 
 	buf := &bytes.Buffer{}
