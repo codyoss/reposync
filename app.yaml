@@ -1,4 +1,3 @@
-service: gerrit-to-github
 runtime: go
 env: flex
 
