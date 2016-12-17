@@ -60,7 +60,7 @@ func main() {
 
 	go mirror()
 
-	http.HandleFunc("/statusz", statusz)
+	http.HandleFunc("/status", statusz)
 
 	appengine.Main()
 }
