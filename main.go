@@ -180,6 +180,10 @@ func status(ok bool, msg string, v ...interface{}) {
 
 	statusText = buf.Bytes()
 
+	// Redact the from/to, just in case there are secrets in the URL (e.g., GitHub token)
+	statusText = bytes.Replace(statusText, []byte(from), []byte("<REDACTED (FROM)>"), -1)
+	statusText = bytes.Replace(statusText, []byte(to), []byte("<REDACTED (TO)>"), -1)
+
 	if ok {
 		log.Printf("OK: %s", statusText)
 	} else {
