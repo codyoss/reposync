@@ -122,10 +122,9 @@ func mirror() {
 		}
 
 		if string(sha) == oldSHA {
-			log.Printf("Nothing to push")
+			ok("Synced - nothing to push: " + oldSHA)
 			continue
 		}
-		oldSHA = string(sha)
 
 		log.Printf("Pushing")
 		cmd = exec.Command("git", "push", "--all", "to") // TODO: CommandContext once Flex is on 1.7
@@ -136,7 +135,8 @@ func mirror() {
 			continue
 		}
 
-		ok("Synced", out)
+		ok("Synced - pushed", out)
+		oldSHA = string(sha)
 	}
 }
 
@@ -144,6 +144,11 @@ func statusz(w http.ResponseWriter, r *http.Request) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
 	w.Header().Set("Content-Type", "text/plain")
+	if time.Now().After(statusTime.Add(15 * time.Minute)) {
+		// Stale. Why? Stalled pull?
+		w.WriteHeader(500)
+		fmt.Fprintln(w, "Possibly not fresh")
+	}
 	if !statusOK {
 		// Use a 500 for the status to indicate bad health.
 		w.WriteHeader(500)
