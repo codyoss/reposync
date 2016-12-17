@@ -105,7 +105,7 @@ func mirror() {
 		limit.Wait(ctx)
 
 		log.Printf("Pulling")
-		cmd := exec.CommandContext(ctx, "git", "pull")
+		cmd := exec.Command("git", "pull") // TODO: CommandContext once Flex is on 1.7
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -127,7 +127,7 @@ func mirror() {
 		oldSHA = string(sha)
 
 		log.Printf("Pushing")
-		cmd = exec.CommandContext(ctx, "git", "push", "--all", "to")
+		cmd = exec.Command("git", "push", "--all", "to") // TODO: CommandContext once Flex is on 1.7
 		cmd.Dir = dir
 		out, err = cmd.CombinedOutput()
 		if err != nil {
