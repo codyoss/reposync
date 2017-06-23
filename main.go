@@ -24,22 +24,27 @@ import (
 	"cloud.google.com/go/compute/metadata"
 )
 
-const dir = "repo"
+var mainJob *job
 
-var (
-	// repo URLs
-	from = os.Getenv("FROM_REPO")
-	to   = os.Getenv("TO_REPO")
-)
+type job struct {
+	name string
+	from string
+	to   string
+	dir  string // staging dir
 
-var (
-	statusMu      sync.Mutex
+	// Status reporting
+	mu            sync.Mutex
 	statusTime    time.Time // time status was set
-	statusOK      = true    // normal state?
+	statusOK      bool      // normal state?
 	statusMessage string    // status indicator, suitable for public use
-)
+}
 
 func main() {
+	var (
+		// repo URLs
+		from = os.Getenv("FROM_REPO")
+		to   = os.Getenv("TO_REPO")
+	)
 	if from == "" || to == "" {
 		log.Fatalf("FROM_REPO and TO_REPO must be set.")
 	}
@@ -58,39 +63,40 @@ func main() {
 	from = reconcile(from)
 	to = reconcile(to)
 
-	go mirror()
+	mainJob = &job{from: from, to: to, dir: "repo", statusOK: true}
+	go mainJob.mirror()
 
 	http.HandleFunc("/status", statusz)
 
 	appengine.Main()
 }
 
-func mirror() {
-	ok("Cloning")
+func (j *job) mirror() {
+	j.ok("Cloning")
 
 	for {
-		cmd := exec.Command("git", "clone", from, dir)
+		cmd := exec.Command("git", "clone", j.from, j.dir)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
-			ok("Cloned", out)
+			j.ok("Cloned", out)
 			break
 		}
-		statusErr("Cloning", err, out)
-		os.RemoveAll(dir)
+		j.statusErr("Cloning", err, out)
+		os.RemoveAll(j.dir)
 		time.Sleep(10 * time.Second)
 		continue
 	}
 
 	for {
-		ok("Setting remote")
-		cmd := exec.Command("git", "remote", "add", "to", to)
-		cmd.Dir = dir
+		j.ok("Setting remote")
+		cmd := exec.Command("git", "remote", "add", "to", j.to)
+		cmd.Dir = j.dir
 		out, err := cmd.CombinedOutput()
 		if err == nil {
-			ok("Added remote", out)
+			j.ok("Added remote", out)
 			break
 		}
-		statusErr("Adding remote", err, out)
+		j.statusErr("Adding remote", err, out)
 		time.Sleep(time.Second)
 	}
 
@@ -104,73 +110,82 @@ func mirror() {
 
 		log.Printf("Pulling")
 		cmd := exec.Command("git", "pull") // TODO: CommandContext once Flex is on 1.7
-		cmd.Dir = dir
+		cmd.Dir = j.dir
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			statusErr("Pull", err, out)
+			j.statusErr("Pull", err, out)
 			continue
 		}
 		log.Printf("Pulled: %s", out)
 
-		sha, err := ioutil.ReadFile(dir + "/.git/refs/heads/master")
+		sha, err := ioutil.ReadFile(j.dir + "/.git/refs/heads/master")
 		if err != nil {
-			statusErr("parse HEAD", err)
+			j.statusErr("parse HEAD", err)
 			continue
 		}
 
 		if string(sha) == oldSHA {
-			ok("Synced - nothing to push: " + oldSHA)
+			j.ok("Synced - nothing to push: " + oldSHA)
 			continue
 		}
 
 		log.Printf("Pushing")
-		cmd = exec.Command("git", "push", "--all", "to") // TODO: CommandContext once Flex is on 1.7
-		cmd.Dir = dir
+		cmd = exec.CommandContext(ctx, "git", "push", "--all", "to")
+		cmd.Dir = j.dir
 		out, err = cmd.CombinedOutput()
 		if err != nil {
-			statusErr("Push", err, out)
+			j.statusErr("Push", err, out)
 			continue
 		}
 
-		ok("Synced - pushed", out)
+		log.Printf("Pushing tags")
+		cmd = exec.CommandContext(ctx, "git", "push", "--tags", "to")
+		cmd.Dir = j.dir
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			j.statusErr("Push tags", err, out)
+			continue
+		}
+
+		j.ok("Synced - pushed", out)
 		oldSHA = string(sha)
 	}
 }
 
 func statusz(w http.ResponseWriter, r *http.Request) {
-	statusMu.Lock()
-	defer statusMu.Unlock()
+	mainJob.mu.Lock()
+	defer mainJob.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain")
-	if time.Now().After(statusTime.Add(15 * time.Minute)) {
+	if time.Now().After(mainJob.statusTime.Add(15 * time.Minute)) {
 		// Stale. Why? Stalled pull?
 		w.WriteHeader(500)
 		fmt.Fprintln(w, "Possibly not fresh")
 	}
-	if !statusOK {
+	if !mainJob.statusOK {
 		// Use a 500 for the status to indicate bad health.
 		w.WriteHeader(500)
 	}
-	fmt.Fprintln(w, "OK", statusOK)
-	fmt.Fprintln(w, statusTime)
-	fmt.Fprintln(w, statusMessage)
+	fmt.Fprintln(w, "OK", mainJob.statusOK)
+	fmt.Fprintln(w, mainJob.statusTime)
+	fmt.Fprintln(w, mainJob.statusMessage)
 }
 
-func ok(msg string, v ...interface{}) {
-	status(true, msg, v...)
+func (j *job) ok(msg string, v ...interface{}) {
+	j.status(true, msg, v...)
 }
 
-func statusErr(msg string, v ...interface{}) {
-	status(false, msg, v...)
+func (j *job) statusErr(msg string, v ...interface{}) {
+	j.status(false, msg, v...)
 }
 
-func status(ok bool, msg string, v ...interface{}) {
-	statusMu.Lock()
+func (j *job) status(ok bool, msg string, v ...interface{}) {
+	j.mu.Lock()
 
-	statusOK = ok
-	statusMessage = msg
-	statusTime = time.Now()
+	j.statusOK = ok
+	j.statusMessage = msg
+	j.statusTime = time.Now()
 
-	statusMu.Unlock()
+	j.mu.Unlock()
 
 	// Log potentially sensitive output.
 
@@ -188,8 +203,8 @@ func status(ok bool, msg string, v ...interface{}) {
 	b := buf.Bytes()
 
 	// Redact the from/to, just in case there are secrets in the URL (e.g., GitHub token)
-	b = bytes.Replace(b, []byte(from), []byte("<REDACTED (FROM)>"), -1)
-	b = bytes.Replace(b, []byte(to), []byte("<REDACTED (TO)>"), -1)
+	b = bytes.Replace(b, []byte(j.from), []byte("<REDACTED (FROM)>"), -1)
+	b = bytes.Replace(b, []byte(j.to), []byte("<REDACTED (TO)>"), -1)
 
 	if ok {
 		log.Printf("OK: %s", b)
