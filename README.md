@@ -5,8 +5,8 @@ Simple repo mirroring (with App Engine flexible environment deployment).
 ## Deploying
 
 ```
-go get -u google.golang.org/appengine/cmd/aedeploy
-aedeploy gcloud app deploy
+go get -u github.com/broady/gobundle
+gobundle gcloud app deploy
 ```
 
 ## Support/guarantees
