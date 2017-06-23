@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -24,13 +25,12 @@ import (
 	"cloud.google.com/go/compute/metadata"
 )
 
-var mainJob *job
+var jobs []*job
 
 type job struct {
-	name string
-	from string
-	to   string
-	dir  string // staging dir
+	ID   string
+	From string
+	To   string
 
 	// Status reporting
 	mu            sync.Mutex
@@ -41,56 +41,80 @@ type job struct {
 
 func main() {
 	var (
-		// repo URLs
+		// repo URLs (legacy)
 		from = os.Getenv("FROM_REPO")
 		to   = os.Getenv("TO_REPO")
+
+		// repo spec (json)
+		spec = os.Getenv("REPOS")
 	)
-	if from == "" || to == "" {
-		log.Fatalf("FROM_REPO and TO_REPO must be set.")
+	if spec != "" {
+		spec = reconcile(spec)
+		if err := json.Unmarshal([]byte(spec), &jobs); err != nil {
+			log.Fatalf("Could not parse REPOS: %v", err)
+		}
+	} else if from != "" && to != "" {
+		jobs = append(jobs, &job{ID: "default", From: from, To: to})
+	} else {
+		log.Fatalf("REPOS environment variable must be set.")
 	}
 
-	// If prefixed with "metadata:", pull it from the GCE metadata server.
-	reconcile := func(s string) string {
-		if !strings.HasPrefix(s, "metadata:") {
-			return s
+	for _, j := range jobs {
+		if j.ID == "" {
+			log.Fatalf("Missing ID for job %+v", j)
 		}
-		val, err := metadata.ProjectAttributeValue(s[len("metadata:"):])
-		if err != nil {
-			log.Fatalf("Could not get project metadata value %q: %v", s, err)
+		if j.From == "" || j.To == "" {
+			log.Fatalf("Empty from or to for job %+v", j)
 		}
-		return val
-	}
-	from = reconcile(from)
-	to = reconcile(to)
+		j.From = reconcile(j.From)
+		j.To = reconcile(j.To)
+		j.statusOK = true
 
-	mainJob = &job{from: from, to: to, dir: "repo", statusOK: true}
-	go mainJob.mirror()
+		go j.mirror()
+	}
 
 	http.HandleFunc("/status", statusz)
 
 	appengine.Main()
 }
 
+// reconcile gets a value from the GCE metadata server if the given string is
+// prefixed with "metadata:".
+func reconcile(s string) string {
+	if !strings.HasPrefix(s, "metadata:") {
+		return s
+	}
+	val, err := metadata.ProjectAttributeValue(s[len("metadata:"):])
+	if err != nil {
+		log.Fatalf("Could not get project metadata value %q: %v", s, err)
+	}
+	return val
+}
+
+func (j *job) dir() string {
+	return "repo-" + j.ID
+}
+
 func (j *job) mirror() {
 	j.ok("Cloning")
 
 	for {
-		cmd := exec.Command("git", "clone", j.from, j.dir)
+		cmd := exec.Command("git", "clone", j.From, j.dir())
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			j.ok("Cloned", out)
 			break
 		}
 		j.statusErr("Cloning", err, out)
-		os.RemoveAll(j.dir)
+		os.RemoveAll(j.dir())
 		time.Sleep(10 * time.Second)
 		continue
 	}
 
 	for {
 		j.ok("Setting remote")
-		cmd := exec.Command("git", "remote", "add", "to", j.to)
-		cmd.Dir = j.dir
+		cmd := exec.Command("git", "remote", "add", "to", j.To)
+		cmd.Dir = j.dir()
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			j.ok("Added remote", out)
@@ -110,7 +134,7 @@ func (j *job) mirror() {
 
 		log.Printf("Pulling")
 		cmd := exec.Command("git", "pull") // TODO: CommandContext once Flex is on 1.7
-		cmd.Dir = j.dir
+		cmd.Dir = j.dir()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			j.statusErr("Pull", err, out)
@@ -118,7 +142,7 @@ func (j *job) mirror() {
 		}
 		log.Printf("Pulled: %s", out)
 
-		sha, err := ioutil.ReadFile(j.dir + "/.git/refs/heads/master")
+		sha, err := ioutil.ReadFile(j.dir() + "/.git/refs/heads/master")
 		if err != nil {
 			j.statusErr("parse HEAD", err)
 			continue
@@ -131,7 +155,7 @@ func (j *job) mirror() {
 
 		log.Printf("Pushing")
 		cmd = exec.CommandContext(ctx, "git", "push", "--all", "to")
-		cmd.Dir = j.dir
+		cmd.Dir = j.dir()
 		out, err = cmd.CombinedOutput()
 		if err != nil {
 			j.statusErr("Push", err, out)
@@ -140,7 +164,7 @@ func (j *job) mirror() {
 
 		log.Printf("Pushing tags")
 		cmd = exec.CommandContext(ctx, "git", "push", "--tags", "to")
-		cmd.Dir = j.dir
+		cmd.Dir = j.dir()
 		out, err = cmd.CombinedOutput()
 		if err != nil {
 			j.statusErr("Push tags", err, out)
@@ -153,21 +177,30 @@ func (j *job) mirror() {
 }
 
 func statusz(w http.ResponseWriter, r *http.Request) {
-	mainJob.mu.Lock()
-	defer mainJob.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain")
-	if time.Now().After(mainJob.statusTime.Add(15 * time.Minute)) {
-		// Stale. Why? Stalled pull?
-		w.WriteHeader(500)
-		fmt.Fprintln(w, "Possibly not fresh")
+
+	for _, j := range jobs {
+		j.mu.Lock()
+		if !j.statusOK {
+			// Use a 500 for the status to indicate bad health.
+			w.WriteHeader(500)
+		}
+		if time.Now().After(j.statusTime.Add(15 * time.Minute)) {
+			w.WriteHeader(500)
+			// Stale. Why? Stalled pull?
+			fmt.Fprintf(w, "Repo %q possibly not fresh\n", j.ID)
+		}
+		j.mu.Unlock()
 	}
-	if !mainJob.statusOK {
-		// Use a 500 for the status to indicate bad health.
-		w.WriteHeader(500)
+
+	for _, j := range jobs {
+		j.mu.Lock()
+		fmt.Fprintln(w, "---- repo", j.ID, "----")
+		fmt.Fprintln(w, "OK", j.statusOK)
+		fmt.Fprintln(w, j.statusTime)
+		fmt.Fprintln(w, j.statusMessage)
+		j.mu.Unlock()
 	}
-	fmt.Fprintln(w, "OK", mainJob.statusOK)
-	fmt.Fprintln(w, mainJob.statusTime)
-	fmt.Fprintln(w, mainJob.statusMessage)
 }
 
 func (j *job) ok(msg string, v ...interface{}) {
@@ -203,8 +236,8 @@ func (j *job) status(ok bool, msg string, v ...interface{}) {
 	b := buf.Bytes()
 
 	// Redact the from/to, just in case there are secrets in the URL (e.g., GitHub token)
-	b = bytes.Replace(b, []byte(j.from), []byte("<REDACTED (FROM)>"), -1)
-	b = bytes.Replace(b, []byte(j.to), []byte("<REDACTED (TO)>"), -1)
+	b = bytes.Replace(b, []byte(j.From), []byte("<REDACTED (FROM)>"), -1)
+	b = bytes.Replace(b, []byte(j.To), []byte("<REDACTED (TO)>"), -1)
 
 	if ok {
 		log.Printf("OK: %s", b)
