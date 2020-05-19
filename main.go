@@ -69,6 +69,7 @@ func main() {
 		}
 		j.From = reconcile(j.From)
 		j.To = reconcile(j.To)
+		j.HTTPCookie = reconcile(j.HTTPCookie)
 		j.statusOK = true
 
 		go j.mirror()
