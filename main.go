@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -103,7 +104,11 @@ func (j *job) dir() string {
 }
 
 func (j *job) cookiefile() string {
-	return "cookies-" + j.ID
+	fn, err := filepath.Abs("cookies-" + j.ID)
+	if err != nil {
+		log.Fatalf("Abs: %v", err)
+	}
+	return fn
 }
 
 func (j *job) mirror() {
@@ -126,7 +131,7 @@ func (j *job) mirror() {
 		if err := ioutil.WriteFile(j.cookiefile(), []byte(j.HTTPCookie), 0400); err != nil {
 			j.statusErr("Writing HTTP cookie file", err)
 		}
-		cmd := exec.Command("git", "config", "http.cookiefile", j.cookiefile())
+		cmd := exec.Command("git", "config", "http.cookieFile", j.cookiefile())
 		cmd.Dir = j.dir()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -183,7 +188,7 @@ func (j *job) mirror() {
 
 		if !bytes.Equal(sha, oldSHA) {
 			j.logf("Pushing")
-			cmd = exec.CommandContext(ctx, "git", "push", "--all", "to")
+			cmd = exec.CommandContext(ctx, "git", "push", "to", "master:master")
 			cmd.Dir = j.dir()
 			out, err = cmd.CombinedOutput()
 			if err != nil {
