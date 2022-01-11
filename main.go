@@ -172,7 +172,7 @@ func (j *job) mirror() {
 		}
 		j.logf("Pulled: %s", out)
 
-		sha, err := ioutil.ReadFile(j.dir() + "/.git/refs/heads/master")
+		sha, err := ioutil.ReadFile(j.dir() + "/.git/refs/heads/main")
 		if err != nil {
 			j.statusErr("parse HEAD", err)
 			continue
@@ -188,7 +188,7 @@ func (j *job) mirror() {
 
 		if !bytes.Equal(sha, oldSHA) {
 			j.logf("Pushing")
-			cmd = exec.CommandContext(ctx, "git", "push", "to", "master:master")
+			cmd = exec.CommandContext(ctx, "git", "push", "to", "main:main")
 			cmd.Dir = j.dir()
 			out, err = cmd.CombinedOutput()
 			if err != nil {
